@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>脆弱性自動通知システム — 構造とこれからやること</title>
+<style>
+  :root{ --bg:#0f1320; --card:#1a2032; --line:#2c3650; --txt:#e6e9f2; --mut:#9aa6c4;
+         --accent:#5b8cff; --ok:#3ecf8e; --warn:#ffb454; --pink:#ff6b9d; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--txt);
+        font-family:"Segoe UI","Hiragino Kaku Gothic ProN",Meiryo,sans-serif; line-height:1.7; }
+  .wrap{ max-width:960px; margin:0 auto; padding:32px 20px 80px; }
+  h1{ font-size:1.7rem; margin:0 0 4px; }
+  h2{ font-size:1.25rem; margin:36px 0 14px; padding-left:12px; border-left:5px solid var(--accent); }
+  .sub{ color:var(--mut); margin:0 0 18px; }
+  .badge{ display:inline-block; background:var(--ok); color:#06251a; font-weight:700;
+          padding:4px 12px; border-radius:999px; font-size:.85rem; }
+  .card{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px 20px; margin:14px 0; }
+  .muted{ color:var(--mut); }
+  /* パイプライン図 */
+  .pipe{ display:flex; flex-wrap:wrap; align-items:stretch; gap:10px; }
+  .step{ flex:1; min-width:150px; background:#202a44; border:1px solid var(--line);
+         border-radius:12px; padding:14px; text-align:center; }
+  .step .n{ display:inline-block; width:26px; height:26px; line-height:26px; border-radius:50%;
+            background:var(--accent); color:#fff; font-weight:700; font-size:.85rem; margin-bottom:6px; }
+  .step b{ display:block; font-size:1rem; }
+  .step small{ color:var(--mut); display:block; margin-top:4px; }
+  .step .file{ margin-top:8px; font-family:Consolas,monospace; font-size:.8rem; color:var(--ok); }
+  .arrow{ align-self:center; color:var(--accent); font-size:1.4rem; }
+  table{ width:100%; border-collapse:collapse; margin-top:6px; font-size:.92rem; }
+  th,td{ text-align:left; padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th{ color:var(--mut); font-weight:600; }
+  code,.mono{ font-family:Consolas,monospace; background:#0c1020; border:1px solid var(--line);
+        padding:2px 7px; border-radius:6px; font-size:.85rem; color:#cfe0ff; }
+  .cmd{ display:block; background:#0c1020; border:1px solid var(--line); border-radius:8px;
+        padding:10px 12px; margin:6px 0; font-family:Consolas,monospace; font-size:.85rem; color:#cfe0ff; }
+  ul.todo{ list-style:none; padding:0; margin:0; }
+  ul.todo li{ padding:10px 0 10px 34px; position:relative; border-bottom:1px dashed var(--line); }
+  ul.todo li::before{ position:absolute; left:0; top:9px; font-size:1.1rem; }
+  li.done::before{ content:"✅"; }
+  li.now::before{ content:"👉"; }
+  li.later::before{ content:"⬜"; }
+  li.done{ color:var(--mut); }
+  .now b{ color:var(--warn); }
+  .pillrow{ margin:8px 0 0; }
+  .pill{ display:inline-block; font-size:.78rem; padding:2px 9px; border-radius:999px;
+         border:1px solid var(--line); color:var(--mut); margin:2px 4px 2px 0; }
+  .note{ background:#2a2233; border-color:#4a3a55; }
+  .note b{ color:var(--pink); }
+  footer{ color:var(--mut); font-size:.82rem; margin-top:40px; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>脆弱性自動通知システム</h1>
+  <p class="sub">IPA（MyJVN）の脆弱性情報と、社内アプリ一覧（資産管理ツールのCSV）を突き合わせて、該当があれば Teams に自動通知する仕組み。</p>
+  <span class="badge">● 動作確認ずみ（通知の実送信まで成功）</span>
+
+  <!-- ───────────── 構造 ───────────── -->
+  <h2>1. 全体の構造（4つの部品が順番に動く）</h2>
+  <p class="muted">各部品は独立したプログラム。あいだは「ファイル（JSON）」だけでつながる＝<b>疎結合</b>。1個ずつ直せる・テストできる。</p>
+
+  <div class="card">
+    <div class="pipe">
+      <div class="step"><span class="n">1</span><b>fetch_vulns</b><small>IPAから脆弱性を取得</small><span class="file">→ vulns.json</span></div>
+      <div class="arrow">→</div>
+      <div class="step"><span class="n">2</span><b>load_assets</b><small>社内アプリCSVを読む</small><span class="file">→ assets.json</span></div>
+      <div class="arrow">→</div>
+      <div class="step"><span class="n">3</span><b>match</b><small>突合（本体）</small><span class="file">→ alerts.json</span></div>
+      <div class="arrow">→</div>
+      <div class="step"><span class="n">4</span><b>notify</b><small>Teamsへ送信</small><span class="file">→ Teams</span></div>
+    </div>
+    <p class="muted" style="margin:14px 0 0">
+      ぜんぶまとめて動かす司令塔 = <span class="mono">run_all</span>。Windowsのタスクスケジューラで毎日1回呼ぶ想定。
+    </p>
+  </div>
+
+  <h2>2. それぞれの部品の役割</h2>
+  <div class="card">
+    <table>
+      <tr><th>部品</th><th>やること</th><th>入口 → 出口</th></tr>
+      <tr><td><b>fetch_vulns</b></td><td>IPAの公式API(MyJVN)から新しい脆弱性を取る。CVSS7.0未満は捨てる</td><td class="muted">MyJVN API → <code>vulns.json</code></td></tr>
+      <tr><td><b>load_assets</b></td><td>資産管理ツールの社内アプリCSVを読む。<b>列が増減してもOK</b>（ヘッダ名で対応）</td><td class="muted">CSV → <code>assets.json</code></td></tr>
+      <tr><td><b>match</b></td><td>脆弱性×社内アプリを突合。名寄せ表(別CSV)経由で「社内アプリ＝log4j」等を判定。確度(高/中/低)と根拠つき</td><td class="muted">2つのjson → <code>alerts.json</code></td></tr>
+      <tr><td><b>notify</b></td><td>当たったものをTeamsへ送信。<b>同じものは二度送らない</b>。送信先URLは設定で差し替え</td><td class="muted"><code>alerts.json</code> → Teams</td></tr>
+    </table>
+    <div class="pillrow">
+      <span class="pill">正本ドキュメント = README.yaml</span>
+      <span class="pill">設定 = config.yaml</span>
+      <span class="pill">送信先URL = .env</span>
+      <span class="pill">テスト = tests/（全37件パス）</span>
+    </div>
+  </div>
+
+  <!-- ───────────── これまで＆これから ───────────── -->
+  <h2>3. これからやること</h2>
+  <div class="card">
+    <ul class="todo">
+      <li class="done">仕組みを4部品で実装（fetch / load / match / notify / run_all）</li>
+      <li class="done">テスト全37件パス・実データ(IPA 121件×社内15件→104件ヒット)で動作確認</li>
+      <li class="done">通知の実送信テスト成功（webhook.site に3件届いた）</li>
+      <li class="now"><b>【次やる】会社（職場）のTeamsで「ワークフロー」を作り、送信先URLをもらう</b><br>
+          <span class="muted">※個人/コミュニティTeamsには機能が無い。会社のMicrosoft365アカウントが必要。</span></li>
+      <li class="now"><b>【次やる】<span class="mono">.env</span> のURLを、テスト用から会社TeamsのURLに書き換える</b>（コードは触らない）</li>
+      <li class="later">本物の資産管理ツールのCSVを <span class="mono">input/</span> に置き、<span class="mono">config.yaml</span> の列名を実物に合わせる</li>
+      <li class="later">名寄せ表(product_aliases)を実環境に合わせて少しずつ育てる</li>
+      <li class="later">Windowsタスクスケジューラで毎日自動実行に登録</li>
+    </ul>
+  </div>
+
+  <div class="card note">
+    <p style="margin:0"><b>判断ペンディング（今は「全件通知」のまま）：</b>
+    ダミーだとChromeだけで約100件ヒットする。本番で多すぎたら「自動更新される製品(Chrome等)を対象外にする」「製品ごと1通にまとめる」「CVSS9以上だけ」等で絞れる。必要になったら設定で対応。</p>
+  </div>
+
+  <h2>4. 使い方（コマンド）</h2>
+  <div class="card">
+    <span class="cmd">cd "G:\マイドライブ\t0kag3\AIJiyukenkyu\会社\恩を売る\脆弱性自動通知"</span>
+    <span class="cmd">python src/run_all.py --dry-run   # 送信せず、何が当たるか確認</span>
+    <span class="cmd">python src/notify.py --limit 3    # テスト送信（先頭3件だけ）</span>
+    <span class="cmd">python src/run_all.py             # 本番（.envにTeamsのURLが要る）</span>
+    <span class="cmd">python -m pytest tests/ -q        # テスト全実行</span>
+  </div>
+
+  <footer>脆弱性自動通知システム / 構造図 — 2026-06-09 時点。詳細仕様は README.yaml を参照。</footer>
+</div>
+</body>
+</html>

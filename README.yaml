@@ -1,0 +1,276 @@
+# 脆弱性自動通知システム — プロジェクト正本（先読み必須）
+# 実装前の合意ドキュメント。コードよりこの契約が先。
+meta:
+  name: 脆弱性自動通知システム
+  purpose: >-
+    IPA(MyJVN API)の脆弱性情報と 資産管理ツール エクスポートの社内アプリ一覧(CSV)を突合し、
+    該当があれば Teams へ自動通知する。総務バックオフィスの自動化。
+  created: "2026-06-09"
+  status: 設計確定・実装着手可能
+
+# ───────────────────────────────────────────────
+# 1. 確定方針（2026-06-09 ユーザー合意）
+decisions:
+  通知先: Teams のみ（Power Automate Workflows / HTTPトリガー）
+  通知方針: 全件自動通知（当たれば確度に関わらず通知。ノイズは名寄せ表精度＋CVSSしきい値で制御）
+  資産元: 資産管理ツール エクスポート CSV
+  突合方式: 資産CSVの製品名を名寄せ表でCPEへ対応（特定の実製品に依存しない汎用突合）
+  実行環境_初期: Windows ローカル（タスクスケジューラで1日1回）
+  実行環境_将来: AWS（EventBridge + Lambda + S3）へ契約固定のまま無改修移行
+  CSV方針: 列の増減・改名・並び替えに耐える疎結合読み込み（ヘッダ名マッピング, §load_assets参照）
+
+# ───────────────────────────────────────────────
+# 2. 設計原則 — 疎結合（契約ベース）
+principles:
+  - 各処理は独立した1本のCLIスクリプト。連携はJSONファイル(=契約)のみ。直接呼び出さない。
+  - 各モジュールはダミー入力ファイル単体でテスト可能（Claude Codeが1本ずつ閉じて実装）。
+  - 認証・文面・配信はPower Automate(GUI)へ逃がし、Python側は「URLにJSONをPOSTするだけ」。
+  - 共通ルール: 文字コードUTF-8（CSV入力のみShift_JIS/CP932許容→UTF-8正規化）/
+    日付ISO8601(YYYY-MM-DD) / 欠損はnull(キーは消さない) / 各JSONはルートに schema_version。
+
+# ───────────────────────────────────────────────
+# 3. データフロー
+dataflow: |
+  fetch_vulns → vulns.json ┐
+                            ├→ match → alerts.json → notify → (POST) → Power Automate → Teams
+  load_assets → assets.json ┘   ↑                        ↑
+                product_aliases.csv              sent_ledger.json
+  run_all（薄いオーケストレータ）→ Windowsタスクスケジューラで1日1回
+
+# ───────────────────────────────────────────────
+# 4. モジュール責務
+modules:
+  fetch_vulns:
+    input: MyJVN API（getVulnOverviewList + getVulnDetailInfo）
+    output: vulns.json
+    責務: 新着脆弱性を取得・正規化(CVE/CPE/CVSS/タイトル/リンク/公開日)。last_fetched状態で差分取得。50件/回ページング対応。
+  load_assets:
+    input: 資産管理ツール CSV
+    output: assets.json
+    責務: CSVを正規化するだけ（突合しない）。ヘッダ名マッピング。未マップ列はextraに保持。不備行は警告＋スキップ。
+  match:
+    input: [vulns.json, assets.json, product_aliases.csv]
+    output: alerts.json
+    責務: 名寄せ表を介して突合。各ヒットに確度(high/medium/low)と根拠を付与。バージョン範囲判定(データがあれば)。
+  notify:
+    input: [alerts.json, sent_ledger.json]
+    output: Power Automate へ POST（成功を台帳に追記）
+    責務: 未通知(alert_key未登録)のみPOST。冪等。dry_run対応。
+
+# ───────────────────────────────────────────────
+# 5. load_assets の疎結合設計（CSVの項目が変わっても壊さない）
+load_assets_design:
+  原則: 列の位置(インデックス)に依存せず、ヘッダ名で論理フィールドへ写像。
+  変更吸収: CSVが変わったら config.yaml の column_map だけ直す（コードは触らない）。
+  必須: display_name のみ。他は欠けても落ちない。
+  未マップ列: 捨てずに extra(object) に全保持。
+  文字コード: 自動判定（資産管理ツールは Shift_JIS 出力が多い）。
+  不備行: エラーで全体停止せず、警告ログ＋スキップ。
+
+# ───────────────────────────────────────────────
+# 6. 契約スキーマ
+contracts:
+
+  config_yaml:
+    schema_version: 1
+    fetch:
+      cvss_min: 7.0          # 未満は取得しない（深刻度しきい値。スコア不明は安全側で残す）
+      lookback_days: 7       # 公開日でこの日数だけ遡る
+      max_items: 200         # 1実行の上限
+      state_file: "state/last_fetched.json"
+      output: "data/vulns.json"
+    assets:
+      csv_path: "input/assets.csv"
+      encoding: "auto"       # auto | utf-8 | cp932
+      column_map:            # 論理フィールド ← CSVの実ヘッダ名（位置非依存）
+        asset_id:     "レコードID"
+        display_name: "アプリケーション名"   # 唯一の必須
+        raw_product:  "製品・ベンダー"
+        version:      "バージョン"
+        owner:        "管理担当者"
+        department:   "利用部署"
+      output: "data/assets.json"
+    match:
+      aliases_path: "input/product_aliases.csv"
+      min_confidence: "low"  # 全件自動通知のため既定low（当たれば全部）
+      output: "data/alerts.json"
+    notify:
+      webhook_url_env: "TEAMS_WEBHOOK_URL"  # 実URLは .env から（直書き禁止）
+      ledger_file: "state/sent_ledger.json"
+      dry_run: false
+    logging:
+      path: "logs/run.log"
+      level: "INFO"
+    dotenv_note: ".env に TEAMS_WEBHOOK_URL=（Power Automateフローが発行するURL）。リポジトリにコミットしない。"
+
+  vulns_json:
+    desc: fetch_vulns の出力。MyJVNの生レスポンスをこの形に正規化（差し替え時もこの形を維持）。
+    root: { schema_version: 1, generated_at: "YYYY-MM-DD", items: "[VulnItem]" }
+    VulnItem:
+      vuln_id:       { type: string,    required: true,  note: "JVNDB ID。重複判定の主キーの一部" }
+      cve_ids:       { type: string[],  required: true,  note: "0件もあり(空配列)" }
+      title:         { type: string,    required: true }
+      cpe:           { type: string[],  required: true,  note: "CPE名。突合の主軸。空配列もあり" }
+      vendor:        { type: "string|null", required: false, note: "CPEから抽出。突合副軸" }
+      product:       { type: "string|null", required: false }
+      cvss_score:    { type: "number|null", required: false }
+      cvss_severity: { type: "string|null", required: false, note: "Critical/High/Medium/Low" }
+      published:     { type: date,      required: true }
+      modified:      { type: date,      required: false }
+      link:          { type: string,    required: true,  note: "JVN詳細URL" }
+    state_file:
+      path: "state/last_fetched.json"
+      shape: { schema_version: 1, last_fetched: "YYYY-MM-DD", last_vuln_id: "JVNDB-..." }
+
+  assets_json:
+    desc: load_assets の出力。CSVを正規化するだけ。
+    root: { schema_version: 1, source_file: "assets.csv", loaded_at: "YYYY-MM-DD", items: "[AssetItem]" }
+    AssetItem:
+      asset_id:     { type: "string|null", required: false, note: "無ければ行番号で採番" }
+      display_name: { type: string,        required: true,  note: "column_mapで唯一の必須" }
+      raw_product:  { type: "string|null", required: false, note: "突合・名寄せの入力" }
+      version:      { type: "string|null", required: false, note: "バージョン範囲判定に使用" }
+      owner:        { type: "string|null", required: false }
+      department:   { type: "string|null", required: false }
+      extra:        { type: object,        required: true,  note: "未マップ列を全保持(空objも可)" }
+
+  product_aliases_csv:
+    desc: match の参照表。人手で育てる。ヘッダ固定。社内呼称→正規ベンダー/製品/CPE。
+    header: [社内呼称, 正式ベンダー, 正式製品名, cpe_prefix, 対象外, 備考]
+    columns:
+      社内呼称:   { required: true,  note: "assetsのdisplay_nameまたはraw_productと突き合わせるキー" }
+      正式ベンダー: { required: false, note: "vulns.vendorと照合" }
+      正式製品名:  { required: false, note: "vulns.productと照合" }
+      cpe_prefix: { required: false, note: "vulns.cpeと前方一致で照合（最も確度が高い）" }
+      対象外:     { required: false, note: "値ありなら突合対象から除外（SaaS等）" }
+    note: 1社内呼称→複数行(=複数コンポーネント)を許可（例: サンプル勤怠システム→tomcat と log4j）。
+
+  alerts_json:
+    desc: match の出力。
+    root: { schema_version: 1, generated_at: "YYYY-MM-DD", items: "[AlertItem]" }
+    AlertItem:
+      alert_key:    { type: string, required: true, note: "'asset_id|vuln_id'。重複通知判定の一意キー" }
+      asset:        { type: object, required: true, note: "{asset_id, display_name, owner}" }
+      vuln:         { type: object, required: true, note: "{vuln_id, cve_ids, title, cvss_score, cvss_severity, link}" }
+      confidence:   { type: string, required: true, note: "high(CPE一致)/medium(正式名一致)/low(表記揺れ一致)" }
+      matched_on:   { type: string, required: true, note: "cpe / product / alias_name" }
+      match_reason: { type: string, required: true, note: "何と何が当たったか（Teamsカードに表示）" }
+    note: min_confidence未満はitemsに含めない（既定lowなので原則全件）。
+
+  sent_ledger_json:
+    desc: notify の冪等台帳。
+    path: "state/sent_ledger.json"
+    root: { schema_version: 1, sent: "[{alert_key, sent_at, status}]" }
+    rule: alert_keyが台帳に無いものだけPOSTし、成功したら追記。再実行しても再送しない。
+
+  notify_payload:
+    desc: notify が Webhook URL に投げる JSON。Pythonはこれを送るだけ。カード整形はPower Automate側。
+    fields:
+      schema_version: 1
+      alert_key:  "APP-001|JVNDB-2025-001234"
+      app_name:   "勤怠管理"
+      product:    "サンプル勤怠システム"
+      owner:      "山田太郎"
+      title:      "Apache Log4j における任意コード実行の脆弱性"
+      cve:        "CVE-2025-12345"
+      cvss_score: 9.8
+      severity:   "Critical"
+      confidence: "high"
+      reason:     "alias 'サンプル勤怠システム' → cpe:/a:apache:log4j が一致"
+      link:       "https://jvndb.jvn.jp/ja/contents/2025/JVNDB-2025-001234.html"
+    note: この契約を守る限り、ローカル/AWSどちらから送ってもPythonコードは不変。
+
+# ───────────────────────────────────────────────
+# 7. 契約変更ルール
+contract_change_rules:
+  - 後方互換な追加(フィールド増) → schema_version 据え置き可。
+  - 破壊的変更(必須化/改名/削除) → schema_version を上げ、関係モジュールを同時更新。
+  - CSVの列変更は契約変更に当たらない（config.yaml の column_map で吸収）。
+
+# ───────────────────────────────────────────────
+# 8. 通知（Teams / Power Automate）
+notify_design:
+  方式: notify は Webhook URL に JSON を POST するだけ。認証/文面/カード整形はPower Automate(GUI)で完結。
+  表示: Adaptive Card（アプリ名・CVSS・CVE・JVNリンク・確度・根拠）。全件自動のため確度と根拠を必ず載せる。
+  ノイズ下限: config.yaml の cvss_min（深刻度しきい値）。
+  power_automate_gui_steps:
+    - 1. トリガー「HTTP要求の受信時」→ Webhook URL発行
+    - 2. アクション「Teamsチャネルにメッセージ投稿」(Adaptive Card)
+    - 3. 受信JSONフィールドをカードへ差し込む
+  廃止注記: >-
+    Teams旧Incoming Webhook(Office 365コネクタ)は廃止済み(2026/4/30全廃)。
+    現行の正攻法がPower Automate Workflowsであり本構成はそれに準拠。
+
+# ───────────────────────────────────────────────
+# 9. 重複防止・運用
+ops:
+  冪等: sent_ledger に「通知済み alert_key」を記録、未通知分のみPOST。
+  dry_run: 実通知せず alerts.json と送信予定を確認可能。
+  ログ: 取得件数/マッチ件数/通知件数/スキップ理由 を残す。
+
+# ───────────────────────────────────────────────
+# 10. AWS移行（今はやらない。契約だけ固定）
+aws_migration:
+  中間JSONファイル: S3バケット
+  run_all: EventBridge(定期) + Lambda(or 1コンテナ)
+  sent_ledger: S3 or DynamoDB
+  スケジューラ: EventBridgeスケジュール
+  note: 契約(スキーマ)固定でロジック不変。SQS/SNSは通知量増・リトライ管理が要る段階で初検討（初期不要）。
+
+# ───────────────────────────────────────────────
+# 11. 状況と残タスク
+status:
+  done:
+    - サンプルCSV: sample_data/assets_dummy.csv（ダミー, 勤怠=サンプル勤怠システム）
+    - 名寄せ表: sample_data/product_aliases_dummy.csv（ダミー）
+    - 方針確定: 通知=Teams / 環境=Windowsローカル / 資産元=資産管理ツール
+    - 実装済: fetch_vulns（src/fetch_vulns.py）。実MyJVN APIで121件取得を確認。
+    - 実装済: load_assets（src/load_assets.py）。ダミーCSV15件。列順入替・未知列に耐性。
+    - 実装済: match（src/match.py）。実データで121×15→104アラート（high=CPE一致）を確認。
+    - 実装済: notify（src/notify.py）。dry-run／冪等送信（poster注入でテスト）。
+    - 実装済: run_all（src/run_all.py）。fetch→load→match→notify を一括実行。
+    - 共有基盤: src/common.py（設定/ロギング/CSV/JSON入出力）, config.yaml, requirements.txt
+    - テスト: tests/ 全37件パス（全モジュール、ネットワーク非依存）。
+  remaining_for_production:
+    - Power Automate フロー作成（GUI）→ 発行URLを環境変数 TEAMS_WEBHOOK_URL に設定（.env）。
+    - 実運用の正式 資産管理ツール CSV を input/ に置き config.assets.csv_path と column_map を調整。
+    - product_aliases を実環境に合わせて拡充（運用しながら育てる）。
+  remaining:
+    - 人手: 通知先Teamsチャネル決定 + Power Automateフロー作成(GUI)。発行URLを .env に設定。
+    - 後追い: 実運用の正式資産管理ツール CSV（列が違っても column_map で吸収=ブロッカーではない）。
+  note: ダミーで end-to-end(取得→突合→通知)まで通せる。fetch_vulns は外部依存(MyJVN)のみで先行着手可能。
+
+# ───────────────────────────────────────────────
+# 13. 使い方（ローカル実行）
+usage:
+  setup: "pip install -r requirements.txt"
+  個別実行:
+    - "python src/fetch_vulns.py            # MyJVN → data/vulns.json"
+    - "python src/fetch_vulns.py --input tests/fixtures/overview_sample.xml  # オフライン解析"
+    - "python src/load_assets.py            # CSV → data/assets.json"
+    - "python src/match.py                  # 突合 → data/alerts.json"
+    - "python src/notify.py --dry-run       # 送信せず予定確認"
+  一括実行:
+    - "python src/run_all.py                # 本番（要 TEAMS_WEBHOOK_URL）"
+    - "python src/run_all.py --dry-run      # 通知せず全段確認"
+    - "python src/run_all.py --skip-fetch   # MyJVN再取得を省略"
+  テスト: "python -m pytest tests/ -q"
+  スケジュール: "Windowsタスクスケジューラで python src/run_all.py を1日1回"
+
+# 14. 実データで観測した運用論点（要判断）
+ops_observation:
+  事象: >-
+    ダミーCSVに Google Chrome を入れて実突合すると、Chrome は週あたりの脆弱性公開が多く、
+    121脆弱性のうち約100件が Chrome 1製品にCPE一致した（全件自動通知だとTeamsが溢れる）。
+  既存の緩和: cvss_min(既定7.0)で低深刻度は除外済み。sent_ledgerで再送はしない（新規CVEのみ）。
+  追加の選択肢（全件自動を維持しつつノイズを抑える案・未実装）:
+    - 自動更新で実質運用不要な製品(Chrome等)を product_aliases で「対象外」にする。
+    - 1製品あたりの新規CVEを1通にまとめる「製品別ダイジェスト通知」。
+    - cvss_min を 9.0 等へ引き上げる。
+  方針: 全件自動通知の合意は維持。上記は運用開始後に必要なら検討（独断追加しない）。
+
+# ───────────────────────────────────────────────
+# 12. 参考（裏取り済み）
+references:
+  MyJVN_API: "https://jvndb.jvn.jp/apis/  # getVulnOverviewList/getVulnDetailInfo, CVSS・CPE取得可, 50件/回ページング"
+  Teams_webhook廃止: "https://learn.microsoft.com/en-us/answers/questions/4429211/support-for-incoming-webhooks-in-teams"

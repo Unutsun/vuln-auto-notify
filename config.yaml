@@ -1,0 +1,36 @@
+# 全モジュール共通設定（README.yaml の contracts.config_yaml に対応）
+# パスはプロジェクトルートからの相対パス。
+schema_version: 1
+
+fetch:
+  cvss_min: 7.0                       # この値未満(スコア判明分)は出力しない
+  lookback_days: 7                    # 公開日でこの日数だけ遡って取得
+  max_items: 200                      # 1実行の取得上限（50件/回ページングの合計）
+  state_file: "state/last_fetched.json"
+  output: "data/vulns.json"
+
+assets:
+  csv_path: "sample_data/assets_dummy.csv"   # 実運用では input/ の正式CSVへ差し替え
+  encoding: "auto"                    # auto | utf-8 | cp932
+  column_map:                         # 論理フィールド ← CSVの実ヘッダ名（位置非依存）
+    asset_id:     "レコードID"
+    display_name: "アプリケーション名"   # 唯一の必須
+    raw_product:  "製品・ベンダー"
+    version:      "バージョン"
+    owner:        "管理担当者"
+    department:   "利用部署"
+  output: "data/assets.json"
+
+match:
+  aliases_path: "sample_data/product_aliases_dummy.csv"
+  min_confidence: "low"               # low|medium|high（全件自動通知のため既定low）
+  output: "data/alerts.json"
+
+notify:
+  webhook_url_env: "TEAMS_WEBHOOK_URL"   # 実URLは .env から（直書き禁止）
+  ledger_file: "state/sent_ledger.json"
+  dry_run: false
+
+logging:
+  path: "logs/run.log"
+  level: "INFO"

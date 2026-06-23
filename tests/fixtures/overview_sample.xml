@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns="http://purl.org/rss/1.0/"
+         xmlns:dc="http://purl.org/dc/elements/1.1/"
+         xmlns:dcterms="http://purl.org/dc/terms/"
+         xmlns:sec="https://jvn.jp/rss/mod_sec/"
+         xmlns:status="http://jvndb.jvn.jp/myjvn/Status">
+  <channel rdf:about="https://jvndb.jvn.jp/myjvn">
+    <title>JVNDB Overview</title>
+    <items><rdf:Seq/></items>
+  </channel>
+
+  <!-- 高深刻度・CVSS v2/v3併記・CVE references・複数CPE -->
+  <item rdf:about="https://jvndb.jvn.jp/ja/contents/2026/JVNDB-2026-001234.html">
+    <title>Apache Log4j における任意のコード実行の脆弱性</title>
+    <link>https://jvndb.jvn.jp/ja/contents/2026/JVNDB-2026-001234.html</link>
+    <description>Apache Log4j には任意のコードを実行される脆弱性が存在します。</description>
+    <sec:identifier>JVNDB-2026-001234</sec:identifier>
+    <sec:references source="CVE" id="CVE-2026-12345">CVE-2026-12345</sec:references>
+    <sec:cpe version="2.2" vendor="apache" product="log4j">cpe:/a:apache:log4j:2.14.1</sec:cpe>
+    <sec:cpe version="2.2" vendor="apache" product="tomcat">cpe:/a:apache:tomcat:9.0.30</sec:cpe>
+    <sec:cvss version="2.0" type="Base" severity="High" score="6.8" vector="AV:N/AC:M/Au:N/C:P/I:P/A:P"/>
+    <sec:cvss version="3.0" type="Base" severity="Critical" score="9.8" vector="CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"/>
+    <dcterms:issued>2026-06-08T17:00:00+09:00</dcterms:issued>
+    <dcterms:modified>2026-06-09T10:30:00+09:00</dcterms:modified>
+  </item>
+
+  <!-- 低深刻度（CVSSしきい値で除外されるべき） -->
+  <item rdf:about="https://jvndb.jvn.jp/ja/contents/2026/JVNDB-2026-000999.html">
+    <title>SampleApp における情報漏えいの脆弱性</title>
+    <link>https://jvndb.jvn.jp/ja/contents/2026/JVNDB-2026-000999.html</link>
+    <sec:identifier>JVNDB-2026-000999</sec:identifier>
+    <sec:cpe version="2.2" vendor="example" product="sampleapp">cpe:/a:example:sampleapp:1.0</sec:cpe>
+    <sec:cvss version="3.0" type="Base" severity="Low" score="3.5" vector="CVSS:3.0/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N"/>
+    <dcterms:issued>2026-06-07T09:00:00+09:00</dcterms:issued>
+    <dcterms:modified>2026-06-07T09:00:00+09:00</dcterms:modified>
+  </item>
+
+  <!-- CVSS不明（スコアNone → 安全側で残すべき） -->
+  <item rdf:about="https://jvndb.jvn.jp/ja/contents/2026/JVNDB-2026-000500.html">
+    <title>OpenSSL における脆弱性</title>
+    <link>https://jvndb.jvn.jp/ja/contents/2026/JVNDB-2026-000500.html</link>
+    <sec:identifier>JVNDB-2026-000500</sec:identifier>
+    <sec:cpe version="2.2" vendor="openssl" product="openssl">cpe:/a:openssl:openssl:1.1.1</sec:cpe>
+    <dcterms:issued>2026-06-06T12:00:00+09:00</dcterms:issued>
+    <dcterms:modified>2026-06-06T12:00:00+09:00</dcterms:modified>
+  </item>
+</rdf:RDF>

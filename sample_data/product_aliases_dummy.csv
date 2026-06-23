@@ -1,0 +1,17 @@
+社内呼称,正式ベンダー,正式製品名,cpe_prefix,対象外,備考
+サンプル勤怠システム,apache,tomcat,cpe:/a:apache:tomcat,,オンプレ版がTomcat上で稼働（内包コンポーネント）
+サンプル勤怠システム,apache,log4j,cpe:/a:apache:log4j,,同上。log4jをログ出力に使用
+Acrobat,adobe,acrobat_reader,cpe:/a:adobe:acrobat_reader,,
+ｱｸﾛﾊﾞｯﾄ,adobe,acrobat_reader,cpe:/a:adobe:acrobat_reader,,半角カナ表記ゆれ
+社内ポータル,wordpress,wordpress,cpe:/a:wordpress:wordpress,,
+FortiGate 60F,fortinet,fortios,cpe:/o:fortinet:fortios,,
+Microsoft Exchange Server,microsoft,exchange_server,cpe:/a:microsoft:exchange_server,,
+Cisco AnyConnect,cisco,anyconnect_secure_mobility_client,cpe:/a:cisco:anyconnect_secure_mobility_client,,
+Google Chrome,google,chrome,cpe:/a:google:chrome,,
+7-Zip,7-zip,7-zip,cpe:/a:7-zip:7-zip,,
+Zoom,zoom,zoom,cpe:/a:zoom:zoom,,
+Atlassian Confluence,atlassian,confluence,cpe:/a:atlassian:confluence,,
+OpenSSL,openssl,openssl,cpe:/a:openssl:openssl,,
+Apache HTTP Server,apache,http_server,cpe:/a:apache:http_server,,
+クラウド経費(SaaS),,,,対象外,SaaSはベンダー保守につき突合対象外
+基幹システム,,,,対象外,自社開発・製品名なし（COBOL資産）
